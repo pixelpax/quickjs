@@ -81,21 +81,27 @@ jobs:
       - name: run
         shell: bash
         run: |
+          # the default sizes, then a sweep over the sizes where every small
+          # integer key of stock qjs is still in one bucket (N < 2048)
           for round in 1 2 3; do
-            echo "::group::stock, round $round"
-            ./stock/build/qjs bench/map-hash-bench.js | tee results/stock-$round.txt
-            echo "::endgroup::"
-            echo "::group::patched, round $round"
-            ./patched/build/qjs bench/map-hash-bench.js | tee results/patched-$round.txt
-            echo "::endgroup::"
-            echo "::group::node, round $round"
-            node bench/map-hash-bench.js | tee results/node-$round.txt
-            echo "::endgroup::"
-            if [ -x d8/d8 ]; then
-              echo "::group::d8, round $round"
-              ./d8/d8 bench/map-hash-bench.js | tee results/d8-$round.txt || echo "d8 failed"
+            for sweep in default small; do
+              if [ $sweep = default ]; then sizes=1000,10000,100000 prefix=; fi
+              if [ $sweep = small ]; then sizes=125,250,500,1000,2000,4000 prefix=small-; fi
+              echo "::group::stock, $sweep sizes, round $round"
+              ./stock/build/qjs bench/map-hash-bench.js $sizes | tee results/${prefix}stock-$round.txt
               echo "::endgroup::"
-            fi
+              echo "::group::patched, $sweep sizes, round $round"
+              ./patched/build/qjs bench/map-hash-bench.js $sizes | tee results/${prefix}patched-$round.txt
+              echo "::endgroup::"
+              echo "::group::node, $sweep sizes, round $round"
+              node bench/map-hash-bench.js $sizes | tee results/${prefix}node-$round.txt
+              echo "::endgroup::"
+              if [ -x d8/d8 ]; then
+                echo "::group::d8, $sweep sizes, round $round"
+                ./d8/d8 bench/map-hash-bench.js -- $sizes | tee results/${prefix}d8-$round.txt || echo "d8 failed"
+                echo "::endgroup::"
+              fi
+            done
           done
       - name: summary
         if: always()
@@ -104,7 +110,7 @@ jobs:
           {
             echo '```'
             cat results/machine.txt
-            for f in results/stock-1.txt results/patched-1.txt results/node-1.txt results/d8-1.txt; do
+            for f in results/stock-1.txt results/patched-1.txt results/node-1.txt results/d8-1.txt results/small-*-1.txt; do
               [ -f $f ] || continue
               echo
               echo "== $f"
