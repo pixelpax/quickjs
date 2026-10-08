@@ -76,6 +76,8 @@ var families = [
     /* integers that do not fit in 32 bits; above 2^53 only the even ones
        are representable, hence the step of 2 */
     [ "2^32 + i",            function(i) { return 4294967296 + i; } ],
+    /* what Date.now() returns, one millisecond apart */
+    [ "1.7e12 + i (time, ms)", function(i) { return 1700000000000 + i; } ],
     [ "2^53 + 2i",           function(i) { return 9007199254740992 + 2 * i; } ],
     /* non-integers */
     [ "i + 0.5",             function(i) { return i + 0.5; } ],
