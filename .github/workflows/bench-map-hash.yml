@@ -1,0 +1,119 @@
+name: bench-map-hash
+
+# Times Map lookups with qjs built from upstream master (stock) and from the
+# map-hash-avalanche branch (patched), and with V8 for comparison.
+# Not part of the pull request: this workflow only lives on this branch.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - bench-map-hash
+
+permissions:
+  contents: read
+
+env:
+  STOCK_SHA: dad13e33cee39b910de2e45ea940c08baf42dbf9
+  PATCHED_SHA: dae2327b907cdbccaddf8602a713dc3e4a6e87c0
+  # the V8 branch that rusty_v8 150.3.0 ships (15.0.245.2); Google publishes
+  # d8 for 15.0.245 on macOS but not on Linux
+  D8_URL: https://storage.googleapis.com/chromium-v8/official/canary/v8-mac-arm64-rel-15.0.245.zip
+
+jobs:
+  bench:
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.STOCK_SHA }}
+          path: stock
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.PATCHED_SHA }}
+          path: patched
+      - name: build stock and patched qjs
+        shell: bash
+        run: |
+          for d in stock patched; do
+            git -C $d log -1 --format='%H %s'
+            cmake -S $d -B $d/build -DCMAKE_BUILD_TYPE=Release
+            cmake --build $d/build --target qjs_exe -j 4
+          done
+      - name: fetch d8 15.0.245
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        continue-on-error: true
+        shell: bash
+        run: |
+          curl -fsSL -o d8.zip "$D8_URL"
+          mkdir d8 && unzip -q d8.zip -d d8
+          ./d8/d8 -e 'print(version())'
+      - name: machine
+        shell: bash
+        run: |
+          mkdir results
+          {
+            echo "os: ${{ matrix.os }} (image $ImageOS $ImageVersion)"
+            uname -srm
+            if [ "$RUNNER_OS" = Linux ]; then
+              lscpu | grep -E 'Model name|^CPU\(s\)|Thread|Core|L1d|L2|L3'
+              free -h | sed -n 2p
+            else
+              sysctl -n machdep.cpu.brand_string
+              echo "cpus: $(sysctl -n hw.ncpu), memory: $(($(sysctl -n hw.memsize) / 1073741824)) GB"
+              sysctl hw.l1dcachesize hw.l2cachesize || true
+            fi
+            cc --version | head -1
+            echo "node $(node -p 'process.version + " (V8 " + process.versions.v8 + ")"')"
+            if [ -x d8/d8 ]; then
+              echo "d8 (V8 $(./d8/d8 -e 'print(version())'))"
+            else
+              echo "d8: not available"
+            fi
+          } | tee results/machine.txt
+      - name: run
+        shell: bash
+        run: |
+          for round in 1 2 3; do
+            echo "::group::stock, round $round"
+            ./stock/build/qjs bench/map-hash-bench.js | tee results/stock-$round.txt
+            echo "::endgroup::"
+            echo "::group::patched, round $round"
+            ./patched/build/qjs bench/map-hash-bench.js | tee results/patched-$round.txt
+            echo "::endgroup::"
+            echo "::group::node, round $round"
+            node bench/map-hash-bench.js | tee results/node-$round.txt
+            echo "::endgroup::"
+            if [ -x d8/d8 ]; then
+              echo "::group::d8, round $round"
+              ./d8/d8 bench/map-hash-bench.js | tee results/d8-$round.txt || echo "d8 failed"
+              echo "::endgroup::"
+            fi
+          done
+      - name: summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '```'
+            cat results/machine.txt
+            for f in results/stock-1.txt results/patched-1.txt results/node-1.txt results/d8-1.txt; do
+              [ -f $f ] || continue
+              echo
+              echo "== $f"
+              grep -v '^JSON ' $f
+            done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: results-${{ matrix.os }}
+          path: results
